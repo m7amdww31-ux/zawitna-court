@@ -13,18 +13,20 @@
 
 import os
 import asyncio
+import traceback
 import discord
 from discord import app_commands
 from anthropic import AsyncAnthropic
 
 # ── الإعدادات ───────────────────────────────────────────────
-DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
+DISCORD_TOKEN = os.environ["DISCORD_TOKEN"].strip()
+_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()   # .strip() يشيل أي مسافة/سطر زايد
 GUILD_ID = os.environ.get("GUILD_ID")              # اختياري: يخلي الأوامر تظهر فوراً
 MODEL = "claude-sonnet-4-6"                         # للأسرع/الأرخص: claude-haiku-4-5-20251001
 AUTO_VERDICT = True                                 # حكم تلقائي فور تسجيل الدفاع
 DEFENSE_TIMEOUT = int(os.environ.get("DEFENSE_TIMEOUT", "0"))  # ثواني؛ 0 = معطّل (بدون حكم غيابي تلقائي)
 
-ai = AsyncAnthropic()   # يقرأ ANTHROPIC_API_KEY تلقائياً
+ai = AsyncAnthropic(api_key=_API_KEY, timeout=60.0, max_retries=5)
 
 # ── البوت ───────────────────────────────────────────────────
 intents = discord.Intents.default()   # السلاش كوماندز ما تحتاج Intents خاصة
@@ -98,6 +100,16 @@ async def get_verdict(accused_name: str, charge: str, defense: str | None) -> st
     return "".join(b.text for b in resp.content if b.type == "text").strip()
 
 
+def err_detail(e: Exception) -> str:
+    """يطبع الخطأ كامل في الـlogs ويرجّع سطر مختصر بالسبب الجذري."""
+    traceback.print_exc()
+    detail = f"{type(e).__name__}: {e}"
+    cause = e.__cause__ or e.__context__
+    if cause:
+        detail += f"  |  السبب: {type(cause).__name__}: {cause}"
+    return detail[:350]
+
+
 async def defense_timeout(channel, channel_id):
     """لو مرّ الوقت ولا دافع المتهم → حكم غيابي تلقائي."""
     try:
@@ -111,7 +123,7 @@ async def defense_timeout(channel, channel_id):
         try:
             text = await get_verdict(case["accused"].display_name, case["charge"], None)
         except Exception as e:
-            await channel.send(f"⚠️ القاضي تعكنن وما قدر يحكم: `{e}`")
+            await channel.send(f"⚠️ القاضي تعكنن وما قدر يحكم:\n`{err_detail(e)}`")
             return
     await channel.send(
         f"{case['accused'].mention}\n"
@@ -186,7 +198,7 @@ async def defend(interaction: discord.Interaction, text: str):
     try:
         verdict_text = await get_verdict(case["accused"].display_name, case["charge"], text)
     except Exception as e:
-        await interaction.followup.send(f"⚠️ القاضي تعكنن وما قدر يحكم: `{e}`")
+        await interaction.followup.send(f"⚠️ القاضي تعكنن وما قدر يحكم:\n`{err_detail(e)}`")
         return
     await interaction.followup.send(
         f"📝 سُجّل الدفاع، والقاضي أصدر حكمه فوراً:\n\n{case['accused'].mention}\n{verdict_text}"
@@ -212,7 +224,7 @@ async def verdict(interaction: discord.Interaction):
     try:
         text = await get_verdict(case["accused"].display_name, case["charge"], case["defense"])
     except Exception as e:
-        await interaction.followup.send(f"⚠️ القاضي تعكنن وما قدر يحكم: `{e}`")
+        await interaction.followup.send(f"⚠️ القاضي تعكنن وما قدر يحكم:\n`{err_detail(e)}`")
         return
     await interaction.followup.send(f"{case['accused'].mention}\n{text}")
 
